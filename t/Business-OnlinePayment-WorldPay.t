@@ -448,8 +448,7 @@ SKIP: {
 
     ok(                                                                 # test 23
         $tx->is_success    == 0                                      &&
-        $tx->authorization eq 'REFUSED'                              &&
-        $tx->status_detail eq 'Payment details incorrect' &&
+        $tx->authorization eq 'ERROR'                                &&
         $tx->error_message eq 'Gateway error',
         "Expected ERROR MasterCard payment"
     );
@@ -481,7 +480,7 @@ SKIP: {
     ok(                                                                 # test 24
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->cvv2_response eq 'APPROVED',
+        $tx->cvv_response eq 'APPROVED',
         "APPROVED CVC result"
     );
 
@@ -512,7 +511,7 @@ SKIP: {
     ok(                                                                 # test 25
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->cvv2_response eq 'FAILED',
+        $tx->cvv_response eq 'FAILED',
         "Expected FAILED CVC result"
     );
 
@@ -543,7 +542,7 @@ SKIP: {
     ok(                                                                 # test 26
         $tx->is_success    == 1                          &&
         $tx->authorization eq 'AUTHORIZED'               &&
-        $tx->cvv2_response eq 'NOT CHECKED BY ACQUIRER',
+        $tx->cvv_response eq 'NOT CHECKED BY ACQUIRER',
         "Expected NOT CHECKED BY ACQUIRER CVC result"
     );
 
@@ -574,7 +573,7 @@ SKIP: {
     ok(                                                                 # test 27
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->cvv2_response eq 'NO RESPONSE FROM ACQUIRER',
+        $tx->cvv_response eq 'NO RESPONSE FROM ACQUIRER',
         "Expected NO RESPONSE FROM ACQUIRER CVC result"
     );
 
@@ -605,7 +604,7 @@ SKIP: {
     ok(                                                                 # test 28
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->cvv2_response eq 'NOT SENT TO ACQUIRER',
+        $tx->cvv_response eq 'NOT SENT TO ACQUIRER',
         "Expected NOT SENT TO ACQUIRER CVC result"
     );
 
@@ -636,7 +635,7 @@ SKIP: {
     ok(                                                                 # test 29
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->cvv2_response eq 'UNKNOWN',
+        $tx->cvv_response eq 'UNKNOWN',
         "Expected UNKNOWN CVC result"
     );
 
@@ -667,7 +666,7 @@ SKIP: {
     ok(                                                                 # test 30
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->avs_code      eq 'APPROVED',
+        $tx->avs_response  eq 'APPROVED',
         "APPROVED AVS result"
     );
 
@@ -698,7 +697,7 @@ SKIP: {
     ok(                                                                 # test 31
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->avs_code      eq 'FAILED',
+        $tx->avs_response  eq 'FAILED',
         "Expected FAILED AVS result"
     );
 
@@ -729,7 +728,7 @@ SKIP: {
     ok(                                                                 # test 32
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->avs_code      eq 'NOT CHECKED BY ACQUIRER',
+        $tx->avs_response  eq 'NOT CHECKED BY ACQUIRER',
         "Expected NOT CHECKED BY ACQUIRER AVS result"
     );
 
@@ -760,7 +759,7 @@ SKIP: {
     ok(                                                                 # test 33
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->avs_code      eq 'NO RESPONSE FROM ACQUIRER',
+        $tx->avs_response  eq 'NO RESPONSE FROM ACQUIRER',
         "Expected NO RESPONSE FROM ACQUIRER AVS result"
     );
 
@@ -791,7 +790,7 @@ SKIP: {
     ok(                                                                 # test 34
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->avs_code      eq 'NOT SENT TO ACQUIRER',
+        $tx->avs_response  eq 'NOT SENT TO ACQUIRER',
         "Expected NOT SENT TO ACQUIRER AVS result"
     );
 
@@ -822,7 +821,7 @@ SKIP: {
     ok(                                                                 # test 35
         $tx->is_success    == 1               &&
         $tx->authorization eq 'AUTHORIZED'    &&
-        $tx->avs_code      eq 'UNKNOWN',
+        $tx->avs_response  eq 'UNKNOWN',
         "Expected UNKNOWN AVS result"
     );
 }

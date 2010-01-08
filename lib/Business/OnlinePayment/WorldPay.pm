@@ -14,14 +14,69 @@ use MIME::Base64;                               # basic authentication
 use base qw(Exporter Business::OnlinePayment);  # Exporter just for $VERSION checking
 
 
-our $VERSION  = '0.09';
+our $VERSION  = '0.10';
 our $DEBUG_FH = \*STDERR;                       # debugging output destination 
 
 
-my ($Payment_Methods, $XML_Error_Codes) = _get_maps();
+# From the "Submitting Transactions in the Direct Model" document
+# and the WorldPay DTD: http://dtd.worldpay.com/paymentService_v1.dtd
+
+my %Payment_Method = (
+    'visa' =>        {
+        paymentType => 'VISA-SSL',
+        _required => [ qw/card_number exp_date name/ ],
+    },
+
+    'amex' =>        {
+        paymentType => 'AMEX-SSL',
+        _required => [ qw/card_number exp_date name/ ],
+    },
+
+    'mastercard' =>  {
+        paymentType => 'ECMC-SSL',
+        _required => [ qw/card_number exp_date name/ ],
+    },
+
+    'diners card' => {
+        paymentType => 'DINERS-SSL',
+        _required => [ qw/card_number exp_date name/ ],
+    },
+
+    'solo card' =>   {
+        paymentType => 'SOLO_GB-SSL',
+        _required => [ qw/card_number exp_date name/ ],
+
+        # from DTD: (issueNumber | (startDate, issueNumber?) )
+        # either issue number or start date must be included
+        # have to handle as a special case in sub submit
+    },
+
+    'maestro' =>     {
+        paymentType => 'MAESTRO-SSL',
+        _required => [ qw/card_number exp_date name/ ],
+
+        # from DTD: startDate?, issueNumber?
+        # issue number and start date both optional (?)
+    },
+
+    'elv' =>         {
+        paymentType => 'ELV-SSL',
+        _required => [ qw/account_holder_name bank_account_number bank_name
+                          bank_location bank_location_id/ ],
+    },
+
+    'jcb card' =>    {
+        paymentType => 'JCB-SSL',
+        _required => [ qw/card_number exp_date name/ ],
+    },
+);
+
+$Payment_Method{diners} = $Payment_Method{'diners card'};
+$Payment_Method{jcb}    = $Payment_Method{'jcb card'};
+$Payment_Method{solo}   = $Payment_Method{'solo card'};
 
 
-my $servers = {
+my %Server = (
     live => {
         server    => 'secure.ims.worldpay.com',
         path      => '/jsp/merchant/xml/paymentService.jsp',
@@ -32,7 +87,7 @@ my $servers = {
         path      => '/jsp/merchant/xml/paymentService.jsp',
         port      => 443,
     },
-};
+);
 
 
 sub debug
@@ -63,9 +118,9 @@ sub set_server
 
     $self->{'_server'} = $server_type;   # 'live' or 'test'
 
-    $self->server( $servers->{$server_type}->{'server'} );
-    $self->path(   $servers->{$server_type}->{'path'}   );
-    $self->port(   $servers->{$server_type}->{'port'}   );
+    $self->server( $Server{$server_type}->{'server'} );
+    $self->path(   $Server{$server_type}->{'path'}   );
+    $self->port(   $Server{$server_type}->{'port'}   );
 }
 
 
@@ -86,9 +141,8 @@ sub set_defaults    # called by B::OP constructor
 
     $self->build_subs(
         qw/
-            installation login password version currency
-            action result_code status_code status_detail
-            cvv2_response avs_code risk_score 
+            installation login password version currency action
+            cvv_response avs_response risk_score last_event
         /
     );
 
@@ -138,10 +192,9 @@ sub submit
     $self->transaction_type( '' ) unless $self->transaction_type;
 
     # additional B::OP::WorldPay attributes
-    $self->$_( '' ) for qw/status_code
-                           status_detail
-                           cvv2_response
-                           avs_code
+    $self->$_( '' ) for qw/last_event
+                           cvv_response
+                           avs_response
                            risk_score/;
 
     $self->set_server( $self->test_transaction ? 'test' : 'live' );
@@ -169,6 +222,9 @@ sub submit
     }
     elsif ( $action eq 'refund' ) {
         ($xml_template, $template_vars) = $self->refund;
+    }
+    elsif ($Payment_Method{lc $content{type}}{paymentType} eq 'ELV-SSL') {
+        ($xml_template, $template_vars) = $self->elv_payment;
     }
     else {
         ($xml_template, $template_vars) = $self->payment;
@@ -221,7 +277,7 @@ sub submit
         print $DEBUG_FH "-" x 80, "\n\n";
     }
 
-    $self->server_response( $response );                # standard B::OP field
+    $self->server_response( $response );
 
     if ($self->server_response =~ /\b401 Authorization Required/) {
         $self->is_success(0);
@@ -252,41 +308,34 @@ sub submit
     # structure of the XML response varies
 
     my (
-        $error, $last_event, $return_code, $cvc_result, $avs_result, $risk, $ok, 
+        $error, $last_event, $return_code, $cvc_result, $avs_response, $risk, $ok, 
     );
 
     # response for various errors:
     if ($error = $xml->find('error')) {
-        $self->is_success(0);                           # standard B::OP field
-        $self->authorization( 'REFUSED' );
-        $self->status_code( $error->attr('code') );
-        $self->status_detail( $XML_Error_Codes->{ $error->attr('code') });
-        $self->error_message( $error->as_text );        # standard B::OP field
+        $self->is_success(0);
+        $self->authorization( 'ERROR' );
+        $self->error_message( $error->as_text );
     }
 
     # response for payment requests or status inquiries:
     elsif ($last_event = $xml->find('lastEvent')) {    # response for payments
 
-        $self->status_detail( $last_event->as_text );
+        $self->last_event( $last_event->as_text );
 
         if ($last_event->as_text eq 'AUTHORISED') {     # UK spelling
-
             $self->is_success(1);
             $self->authorization( 'AUTHORIZED' );       # switching to US spelling
-            $self->status_code( 'OK' );
-            $self->status_detail( 'AUTHORIZED' );
-
+            $self->last_event( 'AUTHORIZED' );
         }
-        elsif ($last_event->as_text eq 'REFUSED') {
 
+        elsif ($last_event->as_text eq 'REFUSED') {
             if ($return_code = $xml->find('ISO8583ReturnCode')) {
                 $self->is_success(0);
                 $self->authorization( 'REFUSED' );
                 $self->result_code( $return_code->attr('code') );
-                $self->status_code( 'DECLINE' );
                 $self->error_message( $return_code->attr('description') );
             }
-
         }
 
 # if needed, can provide special handling for other last_event values:   
@@ -303,13 +352,13 @@ sub submit
         # get CVCResultCode description if present
 
         if ($cvc_result = $xml->find('CVCResultCode')) {
-            $self->cvv2_response( $cvc_result->attr('description') );
+            $self->cvv_response( $cvc_result->attr('description') );
         }
 
         # get AVSResultCode description if present
 
-        if ($avs_result = $xml->find('AVSResultCode')) {
-            $self->avs_code( $avs_result->attr('description') );
+        if ($avs_response = $xml->find('AVSResultCode')) {
+            $self->avs_response( $avs_response->attr('description') );
         }
 
         # get riskScore if present
@@ -323,19 +372,19 @@ sub submit
     # response for cancel request:
     elsif ( $ok = $xml->find('ok') and $ok->find('cancelReceived') ) {
         $self->is_success(1);
-        $self->status_detail( 'CANCEL_REQUEST_RECEIVED' );
+        $self->authorization( 'AUTHORIZED' );
     }
 
     # response for refund request:
     elsif ( $ok = $xml->find('ok') and $ok->find('refundReceived') ) {
         $self->is_success(1);
-        $self->status_detail( 'REFUND_REQUEST_RECEIVED' );
+        $self->authorization( 'AUTHORIZED' );
     }
 
     # response for UNDOCUMENTED cancelOrRefund request:
     elsif ( $ok = $xml->find('ok') and $ok->find('voidReceived') ) {
         $self->is_success(1);
-        $self->status_detail( 'CANCEL_OR_REFUND_REQUEST_RECEIVED' );
+        $self->authorization( 'AUTHORIZED' );
     }
 
     $xml->delete;
@@ -360,11 +409,10 @@ sub submit
  
         print $DEBUG_FH "Additional B::OP::WorldPay attributes:\n";
  
-        print $DEBUG_FH "status_code      = ", $self->status_code,     "\n";
-        print $DEBUG_FH "status_detail    = ", $self->status_detail,   "\n";
-        print $DEBUG_FH "cvv2_response    = ", $self->cvv2_response,   "\n";
-        print $DEBUG_FH "avs_code         = ", $self->avs_code,        "\n";
+        print $DEBUG_FH "cvv_response     = ", $self->cvv_response,    "\n";
+        print $DEBUG_FH "avs_response     = ", $self->avs_response,    "\n";
         print $DEBUG_FH "risk_score       = ", $self->risk_score,      "\n\n";
+        print $DEBUG_FH "last_event       = ", $self->last_event,      "\n\n";
  
         print $DEBUG_FH "-" x 80, "\n\n";
     }
@@ -379,12 +427,14 @@ sub payment
 
     $self->required_fields( 'type' );
 
+    croak("unrecognized credit card type: $content{type}\n") unless $Payment_Method{lc $content{type}};
+
     if ($content{type} =~ /^solo/i) {
         croak("missing required field issue_number or start_date")
             unless exists $content{issue_number} || exists $content{start_date};
     }
 
-    my @required_fields = @{ $Payment_Methods->{ lc $content{type} }{_required} };
+    my @required_fields = @{ $Payment_Method{ lc $content{type} }{_required} };
 
     $self->required_fields( @required_fields );
 
@@ -475,7 +525,7 @@ sub payment
         },
 
         paymentDetails => {
-            paymentType    => $Payment_Methods->{lc $content{type}}{paymentType},
+            paymentType    => $Payment_Method{lc $content{type}}{paymentType},
             action         => 'AUTHORISE',
             cardNumber     => $card_number,
             expiryDate     => {
@@ -497,6 +547,95 @@ sub payment
                 countryCode     => $content{country},
                 telephoneNumber => $content{phone},
             },
+        },
+
+        # required for 3D secure authentication
+        session => {
+            shopperIPAddress => $content{ip_address},
+            id               => $content{session_id},
+        },
+
+        # required for 3D secure authentication
+        shopper => {
+            acceptHeader    => $content{accept_header},
+            userAgentHeader => $content{user_agent},
+        },
+
+    };
+
+    return ($xml_template, $template_vars);
+}
+
+
+sub elv_payment
+{
+    my $self = shift;
+
+    my %content = $self->content;
+
+    $self->required_fields( 'type' );
+
+    my @required_fields = @{ $Payment_Method{ lc $content{type} }{_required} };
+
+    $self->required_fields( @required_fields );
+
+    ########### initialize template variables #########
+
+    $self->currency( $content{currency} ) if $content{currency};
+    my $currency = $self->currency;
+
+    my $amount_value = $content{amount};
+
+    # amount must be specified with an "exponent"
+    # Example: $123.45 would be specified as value = "12345", exponent = "2"
+
+    my $amount_exponent = 2;                # works for all but Indonesian Rupiah
+
+    if ($amount_value) {
+        $amount_value =~ s/,(?=\d\d$)/./g;                  # 123,45    => 123.45
+        $amount_value =~ s/,//g;                            # 12,345.46 => 12345.46
+        $amount_value =  sprintf "%.2f", $amount_value;     # 123       => 123.00
+        $amount_value =~ s/\.//g;                           # 123.00    => 12300
+    }
+
+    # strip non-digits from bank account number
+    my $bank_account_number = '';
+    if ( $content{bank_account_number} ) {
+        ( $bank_account_number = $content{bank_account_number} ) =~ s/\D//g;
+    }
+
+    ########### get XML template for request ##########
+
+    my $xml_template = _get_xml_template( $self->action, 'ELV-SSL' );
+
+    ########### initialize data for template ##########
+
+    my $template_vars = {
+
+        merchantCode   => $self->login,
+
+        version        => $self->version,
+
+        orderCode      => $content{order_number},
+
+        installationId => $self->installation,
+
+        description    => $content{description},
+
+        amount => {
+            value        => $amount_value,
+            currencyCode => $self->currency,
+            exponent     => $amount_exponent,
+        },
+
+        paymentDetails => {
+            paymentType       => $Payment_Method{lc $content{type}}{paymentType},
+            action            => 'AUTHORISE',
+            bankAccountNr     => $bank_account_number,
+            bankName          => $content{bank_name},
+            accountHolderName => $content{account_holder_name},
+            bankLocation      => $content{bank_location},
+            bankLocationId    => $content{bank_location_id},
         },
 
         # required for 3D secure authentication
@@ -630,92 +769,17 @@ sub required_fields
     my %content = $self->content();
 
     foreach (@fields) {
-#       Carp::croak("missing required field $_") unless exists $content{$_};    # standard B::OP check
-        Carp::croak("missing required field $_") unless $content{$_};           # modified for B::OP::WorldPay
+#       croak("missing required field $_") unless exists $content{$_};    # standard B::OP check
+        croak("missing required field $_") unless $content{$_};           # modified for B::OP::WorldPay
     }
-}
-
-
-sub _get_maps
-{
-    # Culled from the "Submitting Transactions in the Direct Model" document
-    # and the WorldPay DTD: http://dtd.worldpay.com/paymentService_v1.dtd
-
-    my %Payment_Methods = (
-        'visa' =>        {
-            paymentType => 'VISA-SSL',
-            _required => [ qw/card_number exp_date name/ ],
-        },
-
-        'amex' =>        {
-            paymentType => 'AMEX-SSL',
-            _required => [ qw/card_number exp_date name/ ],
-        },
-
-        'mastercard' =>  {
-            paymentType => 'ECMC-SSL',
-            _required => [ qw/card_number exp_date name/ ],
-        },
-
-        'diners card' => {
-            paymentType => 'DINERS-SSL',
-            _required => [ qw/card_number exp_date name/ ],
-        },
-
-        'solo card' =>   {
-            paymentType => 'SOLO_GB-SSL',
-            _required => [ qw/card_number exp_date name/ ],
-
-            # from DTD: (issueNumber | (startDate, issueNumber?) )
-            # either issue number or start date must be included
-            # have to handle as a special case in sub submit
-        },
-
-        'maestro' =>     {
-            paymentType => 'MAESTRO-SSL',
-            _required => [ qw/card_number exp_date name/ ],
-
-            # from DTD: startDate?, issueNumber?
-            # issue number and start date both optional (?)
-        },
-
-#       'elv' =>         {
-#           paymentType => 'ELV-SSL',
-#           _required => [ qw/accountHolderName bankAccountNr bankName
-#                               bankLocation bankLocationId/ ],
-#       },
-
-        'jcb card' =>    {
-            paymentType => 'JCB-SSL',
-            _required => [ qw/card_number exp_date name/ ],
-        },
-    );
-
-    $Payment_Methods{diners} = $Payment_Methods{'diners card'};
-    $Payment_Methods{jcb}    = $Payment_Methods{'jcb card'};
-    $Payment_Methods{solo}   = $Payment_Methods{'solo card'};
-
-
-    my %XML_Error_Codes = (
-        1 => 'Internal Error',
-        2 => 'Parse error, invalid XML',
-        3 => 'Invalid number of transactions in batch',
-        4 => 'Security error',
-        5 => 'Invalid request',
-        6 => 'Invalid content',
-        7 => 'Payment details incorrect',
-    );
-
-
-    return (\%Payment_Methods, \%XML_Error_Codes);
 }
 
 
 sub _get_xml_template
 {
-    my $action = shift;
+    my ($action, $payment_type) = @_;;
 
-    my ($payment_xml, $inquiry_xml, $cancel_xml, $refund_xml, $cancel_or_refund_xml);
+    my ($payment_xml, $elv_payment_xml, $inquiry_xml, $cancel_xml, $refund_xml, $cancel_or_refund_xml);
 
     $payment_xml = <<'EOS';
 <?xml version="1.0"?>
@@ -792,6 +856,34 @@ sub _get_xml_template
         </browser>
     </shopper>
     [%- END %]
+    </order>
+</submit>
+</paymentService>
+EOS
+
+    $elv_payment_xml = <<'EOS';
+<?xml version="1.0"?>
+<!DOCTYPE paymentService PUBLIC
+"-//WorldPay/DTD WorldPay PaymentService v1//EN"
+"http://dtd.wp3.rbsworldpay.com/paymentService_v1.dtd">
+
+<paymentService merchantCode="[% merchantCode %]" version="[% version %]">
+<submit>
+    <order orderCode="[% orderCode %]" installationId="[% installationId %]">
+    <description>[% description %]</description>
+    <amount currencyCode="[% amount.currencyCode %]" value="[% amount.value %]" exponent="[% amount.exponent %]" />
+    [%- IF orderContent -%]
+    <orderContent><![CDATA[ [%- orderContent -%] ]]></orderContent>
+    [%- END %]
+    <paymentDetails action="[% paymentDetails.action %]">
+        <ELV-SSL>
+        <accountHolderName>[% paymentDetails.accountHolderName %]</accountHolderName>
+        <bankAccountNr>[%     paymentDetails.bankAccountNr     %]</bankAccountNr>
+        <bankName>[%          paymentDetails.bankName          %]</bankName>
+        <bankLocation>[%      paymentDetails.bankLocation      %]</bankLocation>
+        <bankLocationId>[%    paymentDetails.bankLocationId    %]</bankLocationId>
+        </ELV-SSL>
+    </paymentDetails>
     </order>
 </submit>
 </paymentService>
@@ -874,6 +966,9 @@ EOS
     elsif ($action eq 'cancel_or_refund') {
         return $cancel_or_refund_xml;
     }
+    elsif (defined $payment_type && $payment_type eq 'ELV-SSL') {
+        return $elv_payment_xml;
+    }
     else {
         return $payment_xml;
     }
@@ -918,6 +1013,27 @@ Business::OnlinePayment::WorldPay - RBS WorldPay interface for Business::OnlineP
       cvc            => '377',
   );
 
+  # ELV payment:
+  $tx->content(
+      installation   => '12345',
+      login          => 'testdrive',
+      password       => 'xyzzy',
+
+      type           => 'ELV',
+      action         => 'payment',
+      description    => '20 English Roses',
+      amount         => '49.95',
+      currency       => 'GBP',
+      order_number   => 'A00100',
+
+      ######################################
+      account_holder_name => 'Claire Voyance',
+      bank_account_number => '92441196',
+      bank_name           => 'Bundesbank',
+      bank_location       => 'Berline',
+      bank_location_id    => '20030000',
+      ######################################
+  );
 
   $tx->set_server('test');    # 'live' (default) or 'test'
 
@@ -936,11 +1052,9 @@ Business::OnlinePayment::WorldPay - RBS WorldPay interface for Business::OnlineP
   print "error_message   = ", $tx->error_message,   "\n\n";
 
   print "result_code     = ", $tx->result_code,     "\n";
-  print "status_code     = ", $tx->status_code,     "\n";
-  print "status_detail   = ", $tx->status_detail,   "\n";
 
-  print "cvv2_response   = ", $tx->cvv2_response,   "\n";
-  print "avs_code        = ", $tx->avs_code,        "\n";
+  print "cvv_response    = ", $tx->cvv_response,    "\n";
+  print "avs_response    = ", $tx->avs_response,    "\n";
   print "risk_score      = ", $tx->risk_score,      "\n";
 
   if ($tx->is_success) {
