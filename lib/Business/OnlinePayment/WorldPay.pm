@@ -14,7 +14,7 @@ use MIME::Base64;                               # basic authentication
 use base qw(Exporter Business::OnlinePayment);  # Exporter just for $VERSION checking
 
 
-our $VERSION  = '0.10';
+our $VERSION  = '1.00';
 our $DEBUG_FH = \*STDERR;                       # debugging output destination 
 
 
@@ -1129,7 +1129,7 @@ Paul Grassie, E<lt>paul.grassie@ardishealth.comE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2009 Paul Grassie, Ardis Health, http://www.ardishealth.com. All Rights Reserved.
+Copyright (C) 2010 Paul Grassie, Ardis Health, http://www.ardishealth.com. All Rights Reserved.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.8.8 or,

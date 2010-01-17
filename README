@@ -1,4 +1,4 @@
-Business-OnlinePayment-WorldPay version 0.9
+Business-OnlinePayment-WorldPay version 1.00
 ============================================
 
 This module subclasses Business::OnlinePayment to provide a basic merchant
@@ -79,7 +79,7 @@ This module requires these other modules and libraries:
 
 COPYRIGHT AND LICENCE
 
-Copyright (C) 2009 Paul Grassie, Ardis Health, http://www.ardishealth.com. All Rights Reserved.
+Copyright (C) 2010 Paul Grassie, Ardis Health, http://www.ardishealth.com. All Rights Reserved.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.8.8 or,

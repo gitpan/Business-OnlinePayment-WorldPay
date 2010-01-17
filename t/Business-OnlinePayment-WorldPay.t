@@ -31,7 +31,7 @@ ok( $tx->server eq 'secure-test.wp3.rbsworldpay.com', 'Selecting test server' );
 $tx->test_transaction(1);
 
 SKIP: {
-    skip( 'because too many failed login tests may cause problems', 1) if 1;
+    skip( 'because too many failed login tests may cause problems', 1) if 0;
 
     $tx->content(
         login          => 'FOOBAR',         # presumably invalid
